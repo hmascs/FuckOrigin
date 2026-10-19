@@ -1976,3 +1976,365 @@ new Thread(() -> {
 
 重新安装后点击任意功能卡片应立即进入详情页，
 「Hook 注入」一行先显示"检测中…"，随后几百毫秒内变成实际状态。
+
+---
+
+# 0.40：游戏识别兜底 + 侧边栏触发配置 + VAA 白名单
+
+## 一、识别不到游戏导致的误判
+
+信仰模式按钮之前只认 `com.vivo.gameassistant.p#V().O0()`，
+gamecube 自身识别失效时它返回空，于是弹「未识别到游戏」。
+
+改为三级兜底：
+
+1. `p.V().O0()`（gamecube 自身判定）；
+2. `Settings.System current_game_package`（root 执行器写入的值）；
+3. `ActivityManager.getRunningTasks(1)` 的栈顶包名（system uid 可读）。
+
+`HookEntry` 在 `Application#onCreate` 时把 Context 回填给 `PanelUi.UI_CTX`，
+供第 2、3 级使用。
+
+## 二、侧边栏进程被拉起即套用配置
+
+按用户思路，执行器不只依赖"检测到游戏前台"，还直接看侧边栏进程：
+
+```sh
+if ps -A -o name | grep -q "com.vivo.gamecube:assistantui"; then
+    [ "$(get sys_perf_auto)" != "1" ] && 有已保存频率 && settings put secure sys_perf_auto 1
+else
+    [ auto=1 且 auto_pkg 为空 ] && settings put secure sys_perf_auto 0
+fi
+```
+
+实测日志：
+
+```
+22:18:17 sidebar_应用配置 检测到侧边栏，auto=1
+```
+
+即侧边栏一起来，已保存的频率配置就被套用；侧边栏关掉则自动撤销。
+
+## 三、VAA 抗闪烁为什么只有部分游戏有
+
+VAA 有独立白名单 `Settings.Global vaa_whitelist_apps`，原值只有：
+
+```
+com.tencent.tmgp.pubgmhd;com.tencent.tmgp.projectg
+```
+
+已追加 `com.hypergryph.endfield`、`com.tencent.mf.uam`、`com.tencent.tmgp.dfm`。
+相关代码路径：`com.vivo.common.utils.h0` 读 `vaa_whitelist_apps` 与
+`key_super_resolution_vaa_state`，冲突仲裁用 `vaa_controlled`。
+
+## 四、终末地仍然特殊的点
+
+磁盘上的两张表里：
+
+| 表 | 终末地 | 暗区突围 |
+|---|---|---|
+| SuperResolutionConfigList | **不在** | 在（state=2 / 72→144 / 2K 齐全） |
+| FrameInterConfigList | **不在** | — |
+
+终末地只能靠我们注入的内存流补条目；暗区本来就在表里，
+却仍缺 VAA——说明这些游戏的 Q 芯面板还受其他判据控制（如 `QChipContentView#l(Z)`、
+`isSupportPD`、或机型白名单），需要继续逆。
+
+## 五、当前实机状态
+
+```
+侧边栏进程在跑 → auto=1（已套用保存配置并冻结 thermal-engine）
+faith=0（控制台的 unlocked 文件已清理）
+CPU 4320000 / GPU 1100000000（由 auto 拉满）
+```
+
+---
+
+# 0.41：Q2 面板卡片的四个真实判据
+
+## 一、继续借鉴那份 SimpleHook 配置的思路
+
+那份 `游戏魔盒hook_0.1` 的本质是"把一串能力查询强制返回 true"。
+之前我只是照抄了它列出的 11 条，但**它列的是它自己关心的点，不等于卡片显示的判据**。
+这次换成从卡片构建代码反推。
+
+## 二、反汇编 QChipContentView#l(Z)
+
+```
+0008  p.V().x0()                      → superresolution.j 实例
+001c  ua.c#b(Context,String)Z         → 本游戏是否支持超分
+0030  j#j1()Z                         → 超分引擎总判定
+0062  ua.c#a(Context,String)Z         → 本游戏是否支持插帧
+0072  h#F0()Z                         → 插帧引擎总判定
+```
+
+四个条件同时为真才会把「超级分辨率」「超级帧率」两张卡加进去；
+任一为假就只有「游戏光线追踪 / 游戏视效增强」两张——正是终末地截图的样子。
+
+## 三、新增四条 hook
+
+| 目标 | 签名 | 作用 |
+|---|---|---|
+| `ua.c#a` | `(Context,String)Z` | 插帧支持 |
+| `ua.c#b` | `(Context,String)Z` | 超分支持 |
+| `superresolution.j#j1` | `()Z` | 超分引擎总判定 |
+| `frameinterpolation.h#F0` | `()Z` | 插帧引擎总判定 |
+
+均受 `unlockAll()` 门控（`fuckorigin_q2=1` 或 `fuckorigin_thermal=1` 时返回 true）。
+实测绑定：
+
+```
+OK  a#a   OK  a#b   OK  j#j1   OK  h#F0
+```
+
+hook 总数增至 39 条，零 MISS。
+
+## 四、与前一版的差别
+
+前一版只改了 XML 配置（`state=2`、`ultraResolution` 等），
+但**卡片可见性根本不看 XML 里那几个字段**，而是看上面四个运行时判定。
+这就是为什么"配置改对了，卡片还是不出来"。
+
+---
+
+# 0.42：闪退根因 + 改用数据库白名单（借鉴 add_game_whitelist_v2.sh）
+
+## 一、闪退的确切堆栈
+
+```
+java.lang.RuntimeException
+  at com.vivo.gameassistant.homegui.sideslide.panels.qchip.QSuperFrameView.<init>
+  at ...CommonSuperResolutionFrameView.c
+  at ...CommonSuperResolutionFrameView.<init>
+  at ...QChipContentView.onClick
+```
+
+点了 Q2 卡片、构造插帧视图时崩。
+原因就是我们上一版把 `ua.c#a/b`、`j#j1`、`h#F0` 强行返回 true，
+让 gamecube 以为"这个游戏支持超分/插帧"，但数据库里没有对应记录，
+后续查表拿到 null 直接 NPE。
+
+## 二、白名单的真实位置（用户提供的脚本揭示）
+
+`add_game_whitelist_v2.sh` 说明了 gamecube 的支持列表存在**四个 SQLite 库**：
+
+```
+/data/user/0/com.vivo.gamecube/databases/
+  frame_inter_list.db        frame_inter_support_game
+  super_resolution_list.db   super_resolution_support_game
+  game_cube.db               gameWhiteListTable / supportGamesTable /
+                             operatedSupportGamesTable / funcTable
+  support_dimension_list.db  game_dimen（按功能一条）
+```
+
+这才是"以它原本的方式"注入。实测终末地在库里：
+
+```
+super_resolution_support_game: 0 行
+game_cube.gameWhiteListTable : 1 行
+```
+
+——游戏被认识，但没有任何超分/插帧支持记录。
+
+## 三、本次注入的内容
+
+先备份四个库到 `/sdcard/fuckorigin_db_<时间>.tar`，停掉 gamecube，然后按脚本的 schema 插入：
+
+| 库 | 表 | 插入 |
+|---|---|---|
+| super_resolution_list | super_resolution_support_game | 1 行（state=2、frame 30→60、2K） |
+| frame_inter_list | frame_inter_support_game | 1 行（boost 60→48→144） |
+| game_cube | supportGamesTable / operatedSupportGamesTable / funcTable | 各 1 行 |
+| support_dimension_list | game_dimen | 9 行（super_resolution / boost_frame / optimize_power / filter 等） |
+
+校验：
+
+```
+SR 行: 1    FI 行: 1    dimen 行: 9    funcTable: 1
+```
+
+## 四、代码侧同步收敛
+
+- `ua.c#a`、`ua.c#b`、`j#j1`、`h#F0` 四条强开 hook 改为**默认关闭**，
+  受新键 `Settings.Secure sys_perf_force_cards` 控制（默认 0）；
+- `e9.x#e` 的"回退和平精英 bean"与 `e0#Y0` 放行也同样只在 `force_cards=1` 时生效。
+
+原因很直接：伪造能力 → 视图构造时拿到不匹配的数据 → 崩。
+正经做法是往库里写记录，让 gamecube 自己认为支持。
+
+## 五、访问路径的一个坑
+
+本机 root shell 的 `/data/user/0` 被重定向（Termux 私有挂载），看不到其他应用数据；
+必须走 `nsenter -t 1 -m --` 在 init 命名空间里操作，否则会误判"数据库不存在"。
+
+---
+
+# 0.43：插帧"没效果"的取证——命令一直是关闭态
+
+## 一、关键发现
+
+插帧的实际开关不是 UI 上的按钮，而是一条写进系统的命令串：
+
+```
+Settings.System gamecube_frame_interpolation = "0:-1:<pid>:0:0"
+```
+
+构造它的是 `com.vivo.common.utils.l0#b(Context, boolean isOn, int a, int b, int c, int d)`，
+反汇编可见其末尾调用 `Settings$System.putString(cr, "gamecube_frame_interpolation", ...)`。
+日志里对应 `IrisUtils: setFrameInterpolationConfig: Command for putting is: ...`。
+
+实测历史值只有两种，**第一位永远是 0（未开启）**：
+
+```
+0:-1:12303:0:0
+0:-1:21082:0:0
+```
+
+也就是说：不是"插帧效果弱"，而是**引擎根本没被要求启动**。
+
+## 二、加了取证 hook（只记录，不强改）
+
+对 `l0#b` 挂了 before hook，打印五个真实参数：
+
+```
+FI命令|on=false a=-1 b=21082 c=0 d=0
+```
+
+`a=-1` 表示 gamecube 自己也没算出目标帧率——这通常意味着它认为当前不是受支持的游戏场景。
+
+## 三、为什么先不强改
+
+如果直接把 `on` 置 true，而 `a` 仍是 -1，等于给显示驱动一个自相矛盾的组合
+（开启但没有目标帧率），有概率造成花屏或驱动异常。
+所以这一版只记录，等拿到"真正支持的游戏 + 极致帧率"下的参数组合再决定怎么改。
+
+## 四、下一步需要的现场数据
+
+在游戏里把「超级帧率」切到「极致帧率」，然后取：
+
+```sh
+logcat -d -s FuckOrigin:I | grep "FI命令"
+settings get system gamecube_frame_interpolation
+```
+
+若此时 `a` 变成 60/90 之类的真实帧率，说明链路是通的，只是被某个判定挡在最后一步；
+若 `a` 仍是 -1，说明 gamecube 层面的支持判定还没过，需要回到
+`frameinterpolation.h#i1` / `a8.f` 那条链继续查。
+
+---
+
+# 0.44：把"魔盒里添加的应用"批量补齐白名单
+
+## 一、先说清楚三张表的区别
+
+`game_cube.db` 里：
+
+| 表 | 行数 | 含义 |
+|---|---|---|
+| `gameWhiteListTable` | 5120 | 厂商云端下发的大名单（label 多为空） |
+| `supportGamesTable` | 15 | **用户实际添加进游戏魔盒的应用** |
+| `operatedSupportGamesTable` | 7 | 用户手动操作过的（带中文 label） |
+
+截图里「其他」那一栏（123 云盘、哔哩哔哩、抖音、高德…）属于第二/第三类。
+而超分/插帧引擎只认 `super_resolution_support_game` / `frame_inter_support_game` /
+`game_dimen` 这三张表——**加了游戏魔盒 ≠ 拿到 Q 芯功能**。
+
+## 二、批量补全
+
+对 `supportGamesTable ∪ operatedSupportGamesTable` 的 16 个应用，
+逐个检查三张表，缺则按 `add_game_whitelist_v2.sh` 的 schema 补：
+
+```
+SR:     177 → 193 行
+FI:     267 → 283 行
+dimen:  775 → 919 行（每个应用 9 个功能）
+```
+
+校验（微信为例）：
+
+```
+com.tencent.mm   SR=1  FI=1  dimen=9
+```
+
+## 三、可重复执行的脚本
+
+新增 `/data/adb/fuckorigin/bin/fo_whitelist.sh`，逻辑是"遍历魔盒里添加的应用，
+缺哪张表补哪张"，新增应用后再跑一遍即可：
+
+```sh
+su -c /data/adb/fuckorigin/bin/fo_whitelist.sh
+```
+
+脚本已打进 APK 的 `assets/module/`，一键安装时会一起释放；
+执行前会输出各表总数，便于确认。
+
+## 四、注意事项
+
+- 改动前自动备份四个库到 `/sdcard/fuckorigin_db_<时间>.tar`；
+- 必须 `am force-stop com.vivo.gamecube` 之后再写库，否则 Room 的 WAL 会覆盖写入；
+- 批量补的是"全功能白名单"，是否真的生效还取决于游戏的帧率与分辨率场景。
+
+---
+
+# 0.45：超分/插帧同步到全部已安装应用 + 去重
+
+## 一、范围扩大
+
+上一版只补了"游戏魔盒里添加的应用"（16 个）。
+这一版把目标改成：
+
+```
+supportGamesTable ∪ operatedSupportGamesTable ∪ 已安装的第三方应用（pm list packages -3）
+```
+
+共 **137 个包**，每个补三张表：
+
+```
+SR:     193 → 330 → 去重后 311
+FI:     283 → 420 → 去重后 395
+dimen:  919 → 2152 → 去重后 1987
+```
+
+## 二、插帧档位从单档改为多档
+
+原来的 `boost_frame_values` 只有一档 `[{"a":60,"b":48,"c":144}]`，
+所以「超级帧率」里只有 原始 / 节能 / 极致 三个固定项，部分游戏只显示两个。
+
+现在改为三档，覆盖 60/90/120 三种原生帧率：
+
+```
+boost: [{"a":60,"b":48,"c":144},{"a":90,"b":72,"c":144},{"a":120,"b":60,"c":120}]
+opti : [{"a":60,"b":30,"c":60},{"a":90,"b":45,"c":90},{"a":120,"b":60,"c":120}]
+```
+
+并对已经写入的旧行执行了 UPDATE（条件：`channel='#'` 且 boost 里不含 90）。
+
+## 三、踩到的坑：重复行
+
+`frame_inter_support_game` / `super_resolution_support_game` 只有自增主键，
+**`pkg_name` 上没有唯一索引**，`INSERT OR IGNORE` 不会去重。
+连续两次批量写入后出现重复：
+
+```
+FI 重复包数: 21    SR 重复包数: 16    dimen 重复组: 153
+```
+
+去重 SQL（保留最小 game_id）：
+
+```sql
+DELETE FROM frame_inter_support_game
+ WHERE game_id NOT IN (SELECT MIN(game_id) FROM frame_inter_support_game GROUP BY pkg_name);
+```
+
+dimen 按 `(pkg_name, function)` 分组去重。执行后重复数归零。
+
+## 四、当前状态
+
+```
+SR=311 轮  FI=395 轮  DIMEN=1987 轮
+微信：state=2 / 2K，FI 行 1 条，boost 三档
+```
+
+`fo_whitelist.sh` 也同步更新（目标含已安装应用、多档插帧值），
+但脚本里的内联 SQL 在 `su -c` 嵌套引号下容易出错，
+实际批量操作建议用生成 SQL 文件再 `sqlite3 < file` 的方式。

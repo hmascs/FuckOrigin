@@ -59,6 +59,24 @@ CFG=/system/etc/gamecube/SuperResolutionConfigList.xml
 ensure_sidebar() {
   fg=$(dumpsys activity activities 2>/dev/null | grep -m1 topResumedActivity \
        | sed -n "s/.*u0 \([^ \/]*\)\/.*/\1/p")
+  # 侧边栏进程被拉起即视为"游戏进行中"：套用已保存配置
+  if ps -A -o name 2>/dev/null | grep -q "com.vivo.gamecube:assistantui"; then
+    if [ "$(get sys_perf_auto)" != "1" ]; then
+      cm=$(get sys_perf_c0_max)
+      case "$cm" in ""|null) ;; *)
+        $SET put secure sys_perf_auto 1
+        say "sidebar_应用配置 检测到侧边栏，auto=1"
+        auto=1 ;;
+      esac
+    fi
+  else
+    if [ "$(get sys_perf_auto)" = "1" ] && [ -z "$(get sys_perf_auto_pkg)" ]; then
+      $SET put secure sys_perf_auto 0
+      say "sidebar_退出 侧边栏已关闭，auto=0"
+      auto=0
+    fi
+  fi
+
   # 游戏已退出：清掉残留的游戏状态，避免侧边栏在别的应用上也弹出
   cur0=$(/system/bin/settings get system current_game_package 2>/dev/null)
   case "$cur0" in ""|null) cur0="";; esac

@@ -315,14 +315,40 @@ final class PanelUi {
 
     /** 当前前台游戏包名，供 root 侧在游戏退出后自动关闭温控解除 */
     static String currentGame() {
+        // 1) gamecube 自己的判定
         try {
             Class<?> pc = Class.forName("com.vivo.gameassistant.p");
             Object inst = pc.getMethod("V").invoke(null);
             Object pkg = pc.getMethod("O0").invoke(inst);
             if (pkg instanceof String && ((String) pkg).length() > 0) return (String) pkg;
         } catch (Throwable ignored) { }
+        // 2) 根执行器写入的当前游戏
+        try {
+            Context c = sCtxForGame();
+            if (c != null) {
+                String cur = Settings.System.getString(c.getContentResolver(), "current_game_package");
+                if (cur != null && cur.length() > 0 && !"null".equals(cur)) return cur;
+            }
+        } catch (Throwable ignored) { }
+        // 3) 最近任务里的前台包名
+        try {
+            Context c = sCtxForGame();
+            if (c != null) {
+                android.app.ActivityManager am = (android.app.ActivityManager)
+                        c.getSystemService(Context.ACTIVITY_SERVICE);
+                java.util.List<android.app.ActivityManager.RunningTaskInfo> t =
+                        am.getRunningTasks(1);
+                if (t != null && !t.isEmpty() && t.get(0).topActivity != null) {
+                    return t.get(0).topActivity.getPackageName();
+                }
+            }
+        } catch (Throwable ignored) { }
         return "";
     }
+
+    /** 供 currentGame() 取 Context（HookEntry 在 Application#onCreate 里回填） */
+    static volatile Context UI_CTX;
+    private static Context sCtxForGame() { return UI_CTX; }
 
     private static void styleGold(Button b, boolean on, float radiusDp) {
         GradientDrawable g = new GradientDrawable(

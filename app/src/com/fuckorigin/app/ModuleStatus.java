@@ -54,7 +54,15 @@ public final class ModuleStatus {
                     copyAssetTree(ctx, "module/" + n, DIR + "/" + n, log);
                 }
             }
-            // 执行器需要同时在 /data/adb/fuckorigin/bin
+            // 执行器与白名单补全脚本需要同时在 /data/adb/fuckorigin/bin
+            byte[] wl = readAsset(ctx, "module/fo_whitelist.sh");
+            if (wl != null) {
+                String tmpWl = ctx.getFilesDir() + "/fo_whitelist.sh";
+                FileOutputStream foWl = new FileOutputStream(tmpWl);
+                foWl.write(wl);
+                foWl.close();
+                ShellExec.su("cp '" + tmpWl + "' /data/adb/fuckorigin/bin/fo_whitelist.sh");
+            }
             byte[] perf = readAsset(ctx, "module/fo_perf.sh");
             if (perf != null) {
                 String tmp = ctx.getFilesDir() + "/fo_perf.sh";
@@ -64,7 +72,7 @@ public final class ModuleStatus {
                 ShellExec.su("cp '" + tmp + "' " + EXE);
             }
             ShellExec.su("chmod 755 " + DIR + "/service.sh " + DIR + "/post-fs-data.sh " + EXE
-                    + " " + DIR + "/bin/fuckorigind "
+                    + " " + DIR + "/bin/fuckorigind /data/adb/fuckorigin/bin/fo_whitelist.sh "
                     + "; chmod 644 " + DIR + "/module.prop " + DIR + "/system/etc/gamecube/*.xml"
                     + "; rm -f " + DIR + "/disable"
                     + "; mkdir -p /data/adb/fuckorigin/log");

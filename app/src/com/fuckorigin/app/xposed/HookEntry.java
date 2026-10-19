@@ -20,6 +20,18 @@ public class HookEntry implements IXposedHookLoadPackage {
     private static final String TAG = "FuckOrigin";
     private static final StringBuilder HOOKS = new StringBuilder();
 
+    /** 是否强制开放 Q2 卡片（默认关闭：白名单走数据库，强开容易让 gamecube 查表 NPE 闪退） */
+    private static boolean forceCards() {
+        try {
+            android.content.Context c = appCtx();
+            if (c == null) return false;
+            return android.provider.Settings.Secure.getInt(
+                    c.getContentResolver(), "sys_perf_force_cards", 0) == 1;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     private static boolean unlockAll() {
         return on("f.thermal.bypass.global") || on("f.q2.unlock.all");
     }
@@ -101,6 +113,7 @@ public class HookEntry implements IXposedHookLoadPackage {
             @Override protected void afterHookedMethod(MethodHookParam p) {
                 if (p.thisObject instanceof android.content.Context) {
                     sCtx = (android.content.Context) p.thisObject;
+                    PanelUi.UI_CTX = sCtx;
                     cfgAt = 0L;
                     refreshCfg();
                 }
@@ -282,6 +295,7 @@ public class HookEntry implements IXposedHookLoadPackage {
         hookIfExists(impl, lp, "e", new Class<?>[] { String.class }, new XC_MethodHook() {
             @Override protected void afterHookedMethod(MethodHookParam p) {
                 refreshCfg();
+                if (!forceCards()) return;   // 默认不伪造 bean，避免构造插帧视图时崩
                 if (cfgQ2 != 1 && cfgThermal != 1) return;
                 if (p.getResult() != null) return;
                 String pkg = String.valueOf(p.args[0]);
@@ -449,6 +463,7 @@ public class HookEntry implements IXposedHookLoadPackage {
                 new Class<?>[] { android.content.Context.class, String.class }, new XC_MethodHook() {
             @Override protected void afterHookedMethod(MethodHookParam p) {
                 refreshCfg();
+                if (!forceCards()) return;
                 if (cfgQ2 != 1 && cfgThermal != 1) return;
                 // 只对当前前台游戏放行，避免所有应用都被当成超分游戏
                 String pkg = p.args.length > 1 ? String.valueOf(p.args[1]) : null;
@@ -474,6 +489,44 @@ public class HookEntry implements IXposedHookLoadPackage {
                     p.setResult(cur);
                     android.util.Log.i(TAG, "GAMEPKG|兜底返回 " + cur);
                 } catch (Throwable ignored) { }
+            }
+        });
+
+        // ㉔ Q2 面板卡片可见性：ua.c#a/b 是"本游戏是否支持插帧/超分"，
+        //    j#j1 / h#F0 是引擎侧的总判定，四个都为真才出卡片。
+        for (String mn : new String[] { "a", "b" }) {
+            hookIfExists("ua.c", lp, mn,
+                    new Class<?>[] { android.content.Context.class, String.class },
+                    new XC_MethodHook() {
+                @Override protected void afterHookedMethod(MethodHookParam p) {
+                    refreshCfg();
+                    if (forceCards() && (cfgQ2 == 1 || cfgThermal == 1)) p.setResult(Boolean.TRUE);
+                }
+            });
+        }
+        hookIfExists("com.vivo.gameassistant.superresolution.j", lp, "j1", new XC_MethodHook() {
+            @Override protected void afterHookedMethod(MethodHookParam p) {
+                refreshCfg();
+                if (forceCards() && (cfgQ2 == 1 || cfgThermal == 1)) p.setResult(Boolean.TRUE);
+            }
+        });
+        hookIfExists("com.vivo.gameassistant.frameinterpolation.h", lp, "F0", new XC_MethodHook() {
+            @Override protected void afterHookedMethod(MethodHookParam p) {
+                refreshCfg();
+                if (forceCards() && (cfgQ2 == 1 || cfgThermal == 1)) p.setResult(Boolean.TRUE);
+            }
+        });
+
+        // ㉕ 插帧命令：l0#b(Context,Z,I,I,I,I) 会写入 Settings.System gamecube_frame_interpolation
+        //     形如 "0:-1:<pid>:0:0"，首位 0 表示未开启。这里记录真实参数并强制开启。
+        hookIfExists("com.vivo.common.utils.l0", lp, "b",
+                new Class<?>[] { android.content.Context.class, boolean.class,
+                        int.class, int.class, int.class, int.class }, new XC_MethodHook() {
+            @Override protected void beforeHookedMethod(MethodHookParam p) {
+                android.util.Log.i(TAG, "FI命令|on=" + p.args[1] + " a=" + p.args[2]
+                        + " b=" + p.args[3] + " c=" + p.args[4] + " d=" + p.args[5]);
+                // 暂不强改参数：a=-1 说明 gamecube 自己都算不出目标帧率，
+                // 强行把 on 置 true 可能让显示驱动收到非法组合。先只记录真实取值。
             }
         });
 
