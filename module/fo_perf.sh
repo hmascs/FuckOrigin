@@ -52,7 +52,18 @@ apply() {
   case "$gmax" in ""|null) ;; *) w $GPU/max_freq "$gmax";; esac
 }
 
-last_faith=""; last_auto=""; tick=0
+last_faith=""; last_auto=""; tick=0; FG_GAME=0
+
+# 交还热控：只要没有解除诉求，就确保 thermal-engine 处于运行态
+reconcile_thermal() {
+  [ -f /data/adb/fuckorigin/unlocked ] && return
+  for p in $(pidof thermal-engine-v2 2>/dev/null); do
+    st=$(ps -o STAT -p "$p" 2>/dev/null | tail -1)
+    case "$st" in
+      *T*) kill -CONT "$p" 2>/dev/null; say "thaw 交还热控 pid=$p" ;;
+    esac
+  done
+}
 CFG=/system/etc/gamecube/SuperResolutionConfigList.xml
 
 # 前台是配置表里的游戏、但侧边栏进程不在时，主动拉起（vivo 自身触发有时会失效）
@@ -61,11 +72,14 @@ ensure_sidebar() {
        | sed -n "s/.*u0 \([^ \/]*\)\/.*/\1/p")
   # 侧边栏进程被拉起即视为"游戏进行中"：套用已保存配置
   if ps -A -o name 2>/dev/null | grep -q "com.vivo.gamecube:assistantui"; then
-    if [ "$(get sys_perf_auto)" != "1" ]; then
+    cg=$(/system/bin/settings get system current_game_package 2>/dev/null)
+    case "$cg" in ""|null) cg="";; esac
+    if [ "$(get sys_perf_auto)" != "1" ] && [ -n "$cg" ]; then
       cm=$(get sys_perf_c0_max)
       case "$cm" in ""|null) ;; *)
         $SET put secure sys_perf_auto 1
-        say "sidebar_应用配置 检测到侧边栏，auto=1"
+        $SET put secure sys_perf_auto_pkg "$cg"
+        say "sidebar_应用配置 游戏=$cg auto=1"
         auto=1 ;;
       esac
     fi
@@ -84,6 +98,7 @@ ensure_sidebar() {
     /system/bin/settings delete system current_game_package
     say "清理残留 current_game_package=$cur0"
   fi
+  FG_GAME=0
   case "$fg" in ""|com.vivo.*|com.android.*|com.dsharnessmobile.shell) return;; esac
   hit=0
   [ -f "$CFG" ] && grep -q "pkgName=\"$fg\"" "$CFG" 2>/dev/null && hit=1
@@ -96,6 +111,8 @@ ensure_sidebar() {
     case ";$gl;" in *";$fg;"*) hit=1;; esac
   fi
   [ $hit -eq 1 ] || return
+  FG_GAME=1
+  FG_GAME=1
   ps -A -o name 2>/dev/null | grep -q "com.vivo.gamecube:assistantui" && return
   # gamecube 自身没把游戏写进 current_game_package，补上，否则服务起来了也不出窗口
   cur=$(/system/bin/settings get system current_game_package 2>/dev/null)
@@ -115,18 +132,7 @@ while true; do
   [ "$auto" = "null" ] && auto=0
   [ "$faith" = "null" ] && faith=0
 
-  # 游戏退出后自动关闭温控解除
-  if [ "$faith" = "1" ]; then
-    gp=$(get sys_perf_faith_pkg)
-    case "$gp" in
-      ""|null) ;;
-      *) if [ -z "$(pidof "$gp" 2>/dev/null)" ]; then
-           say "game_exit $gp -> 自动关闭温控解除"
-           $SET put secure sys_perf_faith 0
-           faith=0; last_faith=0; thaw_thermal
-         fi;;
-    esac
-  fi
+  # 信仰模式是手动开关，不随游戏退出自动回退
 
   # 性能模式联动同样在游戏退出后自动关闭
   if [ "$auto" = "1" ]; then
@@ -157,8 +163,25 @@ while true; do
   tick=$((tick + 1))
   [ $((tick % 5)) -eq 0 ] && ensure_sidebar
   update_desc "$([ "$faith" = "1" ] && echo "信仰模式" || ([ "$auto" = "1" ] && echo "性能调度" || echo "待机"))"
+  # 显式降温请求：清掉控制台的 unlocked 并立即交还
+  if [ "$(get sys_perf_thaw)" = "1" ] && [ "$faith" != "1" ]; then
+    rm -f /data/adb/fuckorigin/unlocked
+    $SET put secure sys_perf_thaw 0
+    thaw_thermal
+    faith=0; auto=0
+    say "thaw 收到交还请求"
+  fi
+
+  # 前台不再是白名单游戏时，撤销自动去温控（信仰模式不受影响）
+  if [ "$faith" != "1" ] && [ "$(get sys_perf_auto)" = "1" ] && [ "$FG_GAME" != "1" ]; then
+    $SET put secure sys_perf_auto 0
+    auto=0
+    say "前台非游戏 -> auto=0 并交还热控"
+    thaw_thermal
+  fi
+
   if [ "$faith" = "1" ]; then apply 1; freeze_thermal
   elif [ "$auto" = "1" ]; then apply 0; freeze_thermal
-  else apply 0; fi
+  else apply 0; reconcile_thermal; fi
   sleep 2
 done

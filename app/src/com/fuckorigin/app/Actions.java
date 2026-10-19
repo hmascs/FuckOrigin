@@ -66,6 +66,7 @@ public final class Actions {
                 case "perf.fps.lock":     return fpsLock(c, f, on);
                 case "hook.master": {
                     ShellExec.su("settings put secure sys_perf_hooks " + (on ? 1 : 0));
+                    if (!on) ShellExec.su("settings put secure sys_perf_thaw 1");
                     f.setEnabled(c, on);
                     return on ? "Hook 已启用（重开游戏魔盒生效）" : "Hook 已熔断，全部按原厂逻辑";
                 }

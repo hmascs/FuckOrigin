@@ -2338,3 +2338,170 @@ SR=311 轮  FI=395 轮  DIMEN=1987 轮
 `fo_whitelist.sh` 也同步更新（目标含已安装应用、多档插帧值），
 但脚本里的内联 SQL 在 `su -c` 嵌套引号下容易出错，
 实际批量操作建议用生成 SQL 文件再 `sqlite3 < file` 的方式。
+
+---
+
+# 0.46："设备降温后超分可生效"的判据
+
+## 一、现象
+
+卡片和三档都出来了（原始 / 超高 / 极致），但页面顶部提示
+「设备降温后超分可生效」——功能仍被温度判定挡着。
+
+## 二、排查
+
+在 `qchip` 包下搜温度相关调用：
+
+```
+qchip 里调用 TemperatureHelper 的：0 条
+qchip 里调用 com.vivo.common.e#b()D 的：0 条
+```
+
+说明这句提示不是 UI 自己读温度，而是读某个"当前能不能生效"的布尔。
+
+`superresolution.j` 的无参布尔方法一共 9 个
+（`d1/e1/f1/g1/i1/j1/m1/h1/k1`），其中**只有 `j1()` 被 UI 调用**：
+
+```
+j1 ← CommonSuperResolutionFrameView / QChipContentView / n; / d0;
+```
+
+而上一版为了规避闪退，把 `j1` 与 `h#F0` 一起收进了 `sys_perf_force_cards`（默认 0），
+等于把"引擎认为可用"这个信号关掉了，UI 只好显示降温提示。
+
+## 三、改法
+
+- `superresolution.j#j1()` 与 `frameinterpolation.h#F0()` 恢复为**只受 `unlockAll()` 控制**；
+- `ua.c#a/b`（卡片是否出现）仍然留在 `force_cards` 后面——
+  因为卡片现在由数据库白名单驱动，不需要再伪造。
+
+hook 总数 40 条：
+
+```
+OK j#j1   OK h#F0   OK TemperatureHelper#f   OK e#b   OK h#G0 ...
+```
+
+## 四、待验证
+
+重进游戏后，「设备降温后超分可生效」这行应当消失，
+并且超分真正进入显示管线（`NovaUsecaseControllerV3` 里 `vivo_aisr/nvt_aisr` 变为非 0）。
+若提示仍在，说明还有第二个判据，需要继续在 `j` 类里逐方法对照。
+
+---
+
+# 0.47：彻底去掉超分高温关闭 + 插帧强制开启
+
+## 一、超分：温度源对所有调用方返回 35℃
+
+之前 `com.vivo.common.e#b()D` 只在"调用方属于 Q2 那七个包"时才返回 35，
+其余路径仍返回真实温度，于是高温时 SR 被关。
+
+现在改为：只要 `unlockAll()` 成立（`fuckorigin_q2` 或 `fuckorigin_thermal` 任一为 1），
+**任何调用方**拿到的都是 35℃。
+
+```java
+hookIfExists("com.vivo.common.e", lp, "b", new XC_MethodHook() {
+    @Override protected void afterHookedMethod(MethodHookParam p) {
+        if (!unlockAll()) return;
+        p.setResult(Double.valueOf(35.0d));
+    }
+});
+```
+
+配合已有的 `TemperatureHelper#f()`（返回等长 35℃ 数组）、`h#G0 → false`、
+`gamefilter.a#g0 → false`，gamecube 内部所有温度判定都拿不到高温。
+
+## 二、插帧：把"关闭"命令改写成"开启"
+
+反汇编 `frameinterpolation.i#h(I,I,I,I)V`：
+
+```
+interpolateFrame: gameIndex=…, gamePid=…, depressFps=…, targetFps=…
+invoke-static l0;->b(Context, Z, I, I, I, I)
+```
+
+即真正开启时是 `l0#b(ctx, true, gameIndex, gamePid, depressFps, targetFps)`，
+写入 `Settings.System gamecube_frame_interpolation`，格式：
+
+```
+isOn:gameIndex:gamePid:depressFps:targetFps
+```
+
+而实测所有调用都是 `0:-1:<pid>:0:0`——关闭态、且 gameIndex 与帧率都是无效值。
+
+现在在 `l0#b` 的 before hook 里改写：当 `unlockAll()` 成立且本次是"关闭"调用时，
+
+```
+on   = true
+a    = 3     （配置表里补的条目统一用 index=3）
+c    = 48    （depressFps）
+d    = 144   （targetFps）
+```
+
+实测写入结果：
+
+```
+settings get system gamecube_frame_interpolation
+→ 1:3:0:48:144
+```
+
+第一位已经从 0 变成 1。
+
+## 三、风险与验证
+
+- 这等于绕过 gamecube 自己的判断直接要求显示驱动开插帧；
+  若某游戏的帧率/分辨率组合不匹配，可能出现画面撕裂或拖影，关闭开关即可恢复；
+- 验证看两条：`Settings.System gamecube_frame_interpolation` 首位为 1；
+  `NovaUsecaseControllerV3` 的 `gameMemcFps` 非 0。
+- 超分侧看：页面顶部「设备降温后超分可生效」是否消失，
+  以及 `vivo_aisr` / `nvt_aisr` 是否变为非 0。
+
+---
+
+# 0.48：热控交还的修复（并保证信仰模式不回退）
+
+## 一、"交还热控失败"的三个成因
+
+1. **只在状态切换时 thaw**：`faith/auto` 由 1 变 0 时才 `kill -CONT`，
+   若之后又被别的逻辑 STOP 一次，就再也不会恢复；
+2. **`unlocked` 文件残留**：控制台点过"解除温控"会生成
+   `/data/adb/fuckorigin/unlocked`，执行器把它当成信仰模式，永远不交还；
+3. **auto 被误开**：以前只要侧边栏进程在跑就 `auto=1`，
+   即使已经退到桌面，也照样冻结 thermal-engine，
+   于是"关掉开关也不交还"。
+
+## 二、这次的改法
+
+| 问题 | 处理 |
+|---|---|
+| 只在切换时 thaw | 新增 `reconcile_thermal()`，**每轮都检查**：无解除诉求且引擎处于 `T` 时自动 `kill -CONT` |
+| `unlocked` 残留 | 新增 `sys_perf_thaw` 请求键：App 侧关闭开关时置 1，执行器收到后删 `unlocked`、`kill -CONT` 并清零 |
+| auto 误开 | `auto=1` 现在要求 **前台确实是白名单游戏**（`FG_GAME=1`）；前台不是游戏就 `auto=0` 并立即交还 |
+
+## 三、信仰模式不回退（按要求）
+
+- 删掉了"游戏退出自动关闭信仰模式"那段逻辑；
+  现在信仰模式**只能手动关**，不会被游戏退出、前台变化或 reconcile 影响；
+- `sys_perf_thaw` 请求也加了保护：`faith=1` 时不执行，避免误伤。
+
+实测（无游戏运行时）：
+
+```
+设 faith=1  → 12 秒后 faith 仍为 1，引擎 T，CPU max 4320000     ← 不回退
+手动设 faith=0 → 8 秒内引擎回到 S（运行中）                     ← 交还成功
+```
+
+日志：
+
+```
+23:19:52 faith=1
+23:20:03 faith=0
+23:20:04 前台非游戏 -> auto=0 并交还热控
+```
+
+## 四、auto 与 faith 的分工
+
+| 开关 | 触发 | 回退 |
+|---|---|---|
+| `sys_perf_auto` | 前台是白名单游戏 + 侧边栏进程在跑 | 离开游戏即自动关并交还 |
+| `sys_perf_faith` | 手动（面板金色按钮 / 控制台） | 只有手动关闭才回退 |

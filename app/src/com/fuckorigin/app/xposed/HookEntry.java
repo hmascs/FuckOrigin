@@ -123,9 +123,8 @@ public class HookEntry implements IXposedHookLoadPackage {
         // ① 温度源：b()D —— 只在 Q2 相关调用方生效，避免影响高温提示等安全逻辑
         hookIfExists("com.vivo.common.e", lp, "b", new XC_MethodHook() {
             @Override protected void afterHookedMethod(MethodHookParam p) {
-                if (!on("f.thermal.bypass.global")) return;
-                String caller = callerQ2();
-                if (caller == null) return;
+                // 彻底去掉高温关闭：只要有任一解锁开关开启，温度源一律返回 35℃
+                if (!unlockAll()) return;
                 p.setResult(Double.valueOf(35.0d));
             }
         });
@@ -507,13 +506,13 @@ public class HookEntry implements IXposedHookLoadPackage {
         hookIfExists("com.vivo.gameassistant.superresolution.j", lp, "j1", new XC_MethodHook() {
             @Override protected void afterHookedMethod(MethodHookParam p) {
                 refreshCfg();
-                if (forceCards() && (cfgQ2 == 1 || cfgThermal == 1)) p.setResult(Boolean.TRUE);
+                if (cfgQ2 == 1 || cfgThermal == 1) p.setResult(Boolean.TRUE);
             }
         });
         hookIfExists("com.vivo.gameassistant.frameinterpolation.h", lp, "F0", new XC_MethodHook() {
             @Override protected void afterHookedMethod(MethodHookParam p) {
                 refreshCfg();
-                if (forceCards() && (cfgQ2 == 1 || cfgThermal == 1)) p.setResult(Boolean.TRUE);
+                if (cfgQ2 == 1 || cfgThermal == 1) p.setResult(Boolean.TRUE);
             }
         });
 
@@ -525,6 +524,18 @@ public class HookEntry implements IXposedHookLoadPackage {
             @Override protected void beforeHookedMethod(MethodHookParam p) {
                 android.util.Log.i(TAG, "FI命令|on=" + p.args[1] + " a=" + p.args[2]
                         + " b=" + p.args[3] + " c=" + p.args[4] + " d=" + p.args[5]);
+                refreshCfg();
+                if (cfgQ2 == 1 || cfgThermal == 1) {
+                    // gameIndex 未知时用 3（与配置表里补的条目一致），depress 48 / target 144
+                    if (!Boolean.TRUE.equals(p.args[1])) {
+                        p.args[1] = Boolean.TRUE;
+                        if (((Integer) p.args[2]).intValue() < 0) p.args[2] = Integer.valueOf(3);
+                        if (((Integer) p.args[4]).intValue() <= 0) p.args[4] = Integer.valueOf(48);
+                        if (((Integer) p.args[5]).intValue() <= 0) p.args[5] = Integer.valueOf(144);
+                        android.util.Log.i(TAG, "FI命令|改写为开启 " + p.args[2] + ":"
+                                + p.args[3] + ":" + p.args[4] + ":" + p.args[5]);
+                    }
+                }
                 // 暂不强改参数：a=-1 说明 gamecube 自己都算不出目标帧率，
                 // 强行把 on 置 true 可能让显示驱动收到非法组合。先只记录真实取值。
             }

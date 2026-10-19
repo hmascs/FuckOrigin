@@ -118,6 +118,7 @@ final class PanelUi {
                     putS(v.getContext(), K_FAITH_PKG, gp);
                 }
                 put(v.getContext(), K_FAITH, next ? 1 : 0);
+                if (!next) put(v.getContext(), "sys_perf_thaw", 1);   // 关闭时立即交还热控
                 styleGold(faith, next, 10);
                 faith.setText(next ? "信仰模式 · 已开启" : "信仰模式");
                 Toast.makeText(v.getContext(),

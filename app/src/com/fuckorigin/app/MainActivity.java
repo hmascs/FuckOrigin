@@ -778,7 +778,7 @@ public class MainActivity extends Activity {
         col.addView(title);
 
         LinearLayout g = cardGroup();
-        g.addView(kvRow("应用", "FuckOrigin 0.1.1 beta（自编译，非商店分发）"));
+        g.addView(kvRow("应用", "FuckOrigin 0.1.2 beta（自编译，非商店分发）"));
         g.addView(kvRow("作者", "hmascs"));
         g.addView(kvRow("初期资金", "Nick Ji"));
         g.addView(divider());
