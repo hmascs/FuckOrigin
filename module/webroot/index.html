@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>FuckOrigin Thermal</title>
+<style>
+  :root{
+    --bg:#F2F2F5; --card:#FFFFFF; --text:#1A1B21; --text2:#8A8A8E;
+    --divider:#E5E5E8; --accent:#0F77FF; --action:#456FFF;
+    --warn:#E5484D; --ok:#2FBF71; --r:16px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#121318; --card:#1E1F25; --text:#E3E1E9; --text2:#9A9FA8; --divider:#33343A; }
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;background:var(--bg);color:var(--text);font-size:15px;line-height:1.45;
+       font-family:-apple-system,"PingFang SC","Noto Sans CJK SC",system-ui,sans-serif;
+       padding:calc(env(safe-area-inset-top) + 14px) 16px 32px;}
+  h1{font-size:22px;margin:0}
+  .sub{color:var(--text2);font-size:13px;margin-top:3px}
+  .card{background:var(--card);border-radius:var(--r);padding:16px;margin-top:14px}
+  .row{display:flex;align-items:center;justify-content:space-between;min-height:46px}
+  .row+.row{border-top:.5px solid var(--divider)}
+  .k{font-size:15px}
+  .v{font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--text2);text-align:right}
+  .tag{padding:2px 8px;border-radius:6px;font-size:12px;font-weight:600}
+  .tag.on{background:rgba(15,119,255,.12);color:var(--accent)}
+  .tag.off{background:rgba(138,138,142,.14);color:var(--text2)}
+  .tag.warn{background:rgba(229,72,77,.12);color:var(--warn)}
+  .hero{display:flex;align-items:center;gap:14px}
+  .dot{width:14px;height:14px;border-radius:50%;background:var(--text2);flex:0 0 auto;
+       box-shadow:0 0 0 4px rgba(138,138,142,.15)}
+  .dot.on{background:var(--accent);box-shadow:0 0 0 4px rgba(15,119,255,.18)}
+  .dot.hot{background:var(--warn);box-shadow:0 0 0 4px rgba(229,72,77,.18)}
+  .hero .t{flex:1}
+  .hero b{font-size:17px}
+  .hero .d{color:var(--text2);font-size:13px;margin-top:2px}
+  button{width:100%;border:0;border-radius:14px;padding:15px;font-size:16px;font-weight:600;
+         background:var(--accent);color:#fff;margin-top:10px;font-family:inherit}
+  button.ghost{background:rgba(138,138,142,.12);color:var(--text)}
+  button:disabled{opacity:.45}
+  .metrics{display:grid;grid-template-columns:1fr 1fr;gap:14px 12px}
+  .num{font-family:ui-monospace,Menlo,monospace;font-size:19px;font-weight:700}
+  .lbl{color:var(--text2);font-size:12px;margin-top:2px}
+  .bar{height:5px;border-radius:3px;background:rgba(138,138,142,.18);margin-top:7px;overflow:hidden}
+  .bar i{display:block;height:100%;background:var(--accent);border-radius:3px;transition:width .4s}
+  pre{font-size:11.5px;line-height:1.6;color:var(--text2);margin:0;white-space:pre-wrap;
+      max-height:180px;overflow:auto;font-family:ui-monospace,Menlo,monospace}
+  .foot{color:var(--text2);font-size:12px;text-align:center;margin-top:18px}
+</style>
+</head>
+<body>
+<h1>FuckOrigin Thermal</h1>
+<div class="sub" id="mode">KernelSU 模块面板</div>
+
+<div class="card">
+  <div class="hero">
+    <span class="dot" id="dot"></span>
+    <div class="t"><b id="title">读取中…</b><div class="d" id="desc">—</div></div>
+    <span class="tag off" id="ttag">—</span>
+  </div>
+  <button id="btn">解除温控限制</button>
+  <button class="ghost" id="relock">交还热控</button>
+</div>
+
+<div class="card">
+  <div class="metrics">
+    <div><div class="num" id="tShell">—</div><div class="lbl">机身</div></div>
+    <div><div class="num" id="tCpu">—</div><div class="lbl">CPU</div></div>
+    <div><div class="num" id="tGpu">—</div><div class="lbl">GPU</div></div>
+    <div><div class="num" id="engine">—</div><div class="lbl">thermal-engine-v2</div></div>
+    <div><div class="num" id="p6">—</div><div class="lbl">大核上限</div>
+         <div class="bar"><i id="p6bar" style="width:0"></i></div></div>
+    <div><div class="num" id="gpu">—</div><div class="lbl">GPU 上限</div>
+         <div class="bar"><i id="gpubar" style="width:0"></i></div></div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="row"><span class="k">CPU 小核簇 冷却档位</span><span class="v" id="c0">—</span></div>
+  <div class="row"><span class="k">CPU 大核簇 冷却档位</span><span class="v" id="c1">—</span></div>
+  <div class="row"><span class="k">GPU 冷却档位</span><span class="v" id="c2">—</span></div>
+  <div class="row"><span class="k">自动回退阈值</span><span class="v" id="th">52 ℃</span></div>
+</div>
+
+<div class="card">
+  <div class="row"><span class="k">运行输出</span><span class="v" id="tick">—</span></div>
+  <pre id="log">—</pre>
+</div>
+
+<div class="foot">KernelSU 模块 · 每 2 秒刷新</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const API = 'http://127.0.0.1:8899';
+
+/* 两条通道：
+   1) 在 KernelSU 管理器里打开 → 有 window.ksu，直接以 root 跑命令
+   2) 用普通浏览器打开 → 走 daemon 的 HTTP 接口 */
+const hasKsu = (typeof window.ksu !== 'undefined');
+
+function kexec(cmd){
+  return new Promise(resolve => {
+    if (!window.ksu || typeof window.ksu.exec !== 'function') {
+      resolve({errno:-1, stdout:'', stderr:'no ksu bridge'}); return;
+    }
+    const name = 'cb_' + Math.random().toString(36).slice(2);
+    window[name] = (errno, stdout, stderr) => {
+      try { delete window[name]; } catch(e) { window[name] = undefined; }
+      resolve({errno, stdout: stdout || '', stderr: stderr || ''});
+    };
+    try { window.ksu.exec(cmd, '{}', name); }
+    catch(e){ resolve({errno:-1, stdout:'', stderr:String(e)}); }
+  });
+}
+
+/* 一次性把状态取全 —— 用 shell 内建 $(<f) 读，95 个热区也只要 45ms */
+const STATUS_SH = "P=$(pidof thermal-engine-v2 | awk '{print $1}'); echo ENGINE $P; [ -n \"$P\" ] && echo STAT $(ps -o STAT -p $P 2>/dev/null | tail -1); for d in /sys/class/thermal/cooling_device*; do [ -r $d/type ] || continue; t=$(< $d/type); case $t in cpu-cluster0|cpu-cluster1|gpu) echo CD $t $(< $d/cur_state) $(< $d/max_state);; esac; done; [ -r /sys/devices/system/cpu/cpufreq/policy6/scaling_max_freq ] && echo F6 $(< /sys/devices/system/cpu/cpufreq/policy6/scaling_max_freq) $(< /sys/devices/system/cpu/cpufreq/policy6/cpuinfo_max_freq); [ -r /sys/class/kgsl/kgsl-3d0/max_gpuclk ] && { G=$(< /sys/class/kgsl/kgsl-3d0/max_gpuclk); A=$(< /sys/class/kgsl/kgsl-3d0/gpu_available_frequencies); echo GPU $G $(printf '%s\n' $A | sort -n | tail -1); }; for z in /sys/class/thermal/thermal_zone*; do [ -r $z/type ] || continue; echo TZ $(< $z/type) $(< $z/temp); done; echo TS $(dumpsys thermalservice 2>/dev/null | grep -m1 Thermal); echo FLAG $([ -f /data/adb/fuckorigin/unlocked ] && echo 1 || echo 0)"
+
+function parseDump(text){
+  const s = {engine:'-', estat:'未运行', coolers:[], f6:'0', f6h:'0', gpu:'0', gpuh:'0',
+             shell:0, cpu:0, gpuT:0, ts:'', unlocked:false};
+  text.split('\n').forEach(line=>{
+    const p = line.trim().split(/\s+/);
+    switch(p[0]){
+      case 'ENGINE': s.engine = p[1] || '-'; break;
+      case 'STAT':   s.estat = (p.slice(1).join('').includes('T') && s.engine!=='-') ? '已冻结' : (s.engine!=='-'?'运行中':'未运行'); break;
+      case 'CD':     if(p[1]) s.coolers.push({type:p[1], cur:p[2], max:p[3]}); break;
+      case 'F6':     s.f6 = p[1]; s.f6h = p[2]; break;
+      case 'GPU':    s.gpu = p[1]; s.gpuh = p[2]; break;
+      case 'TZ': {
+        const v = parseFloat(p[2]) / 1000;
+        if(p[1]==='tz_shell') s.shell = v;
+        if(p[1].startsWith('cpu-')||p[1].startsWith('cpuss-')) s.cpu = Math.max(s.cpu, v);
+        if(p[1].startsWith('gpuss')) s.gpuT = Math.max(s.gpuT, v);
+        break;
+      }
+      case 'TS':   s.ts = (line.replace(/^TS\s*/, '').replace('Thermal Status:','').trim()); break;
+      case 'FLAG': s.unlocked = p[1] === '1'; break;
+    }
+  });
+  return s;
+}
+
+function render(s){
+  $('dot').className = 'dot' + (s.shell > 52 ? ' hot' : (s.unlocked ? ' on' : ''));
+  $('title').textContent = s.unlocked ? '温控已解除' : '温控正常';
+  $('desc').textContent = s.unlocked ? '引擎已冻结 · 频率上限已放开' : 'thermal-engine-v2 正在接管';
+  $('btn').textContent = s.unlocked ? '解除中（点击撤销）' : '解除温控限制';
+  $('ttag').textContent = 'Thermal ' + (s.ts || '—');
+  $('ttag').className = 'tag ' + (parseInt(s.ts) >= 3 ? 'warn' : (s.unlocked ? 'on' : 'off'));
+
+  $('tShell').textContent = s.shell > 0 ? s.shell.toFixed(1) + '°' : '—';
+  $('tCpu').textContent   = s.cpu > 0 ? s.cpu.toFixed(1) + '°' : '—';
+  $('tGpu').textContent   = s.gpuT > 0 ? s.gpuT.toFixed(1) + '°' : '—';
+  $('engine').textContent = s.estat;
+
+  const a = parseInt(s.f6,10), ah = parseInt(s.f6h,10);
+  $('p6').textContent = isFinite(a) ? Math.round(a/1000) + ' MHz' : '—';
+  $('p6bar').style.width = ah ? Math.min(100, a*100/ah) + '%' : '0';
+
+  const g = parseInt(s.gpu,10), gh = parseInt(s.gpuh,10);
+  $('gpu').textContent = isFinite(gh) && gh ? Math.round(gh/1e6) + ' MHz' : '—';
+  $('gpubar').style.width = gh ? Math.min(100, g*100/gh) + '%' : '0';
+
+  s.coolers.forEach((c,i)=>{
+    const el = $('c'+i);
+    if(el) el.textContent = (c.cur||'?') + ' / ' + (c.max||'?') + '  ' + c.type;
+  });
+
+  $('tick').textContent = new Date().toLocaleTimeString();
+}
+
+async function refresh(){
+  try{
+    if(hasKsu){
+      const r = await kexec(STATUS_SH);
+      render(parseDump(r.stdout));
+    } else {
+      const r = await fetch(API + '/api/status', {cache:'no-store'});
+      const j = await r.json();
+      render({unlocked:j.unlocked, engine:j.engine.pid, estat:j.engine.state,
+              coolers:j.coolers, f6:j.freq.p6, f6h:j.freq.p6h, gpu:j.freq.gpu, gpuh:j.freq.gpuh,
+              shell:j.temp.shell, cpu:j.temp.cpu, gpuT:j.temp.gpu, ts:j.thermal});
+      const lr = await fetch(API + '/api/log', {cache:'no-store'});
+      const arr = await lr.json();
+      $('log').textContent = arr.slice(-12).join('\n') || '—';
+    }
+  }catch(e){
+    $('title').textContent = '读取失败';
+    $('desc').textContent = hasKsu ? 'KernelSU 接口不可用' : '确认模块已安装并重启';
+  }
+}
+
+async function act(verb){
+  $('btn').disabled = true; $('relock').disabled = true;
+  if(hasKsu){
+    const cmd = verb === 'unlock'
+      ? `P=$(pidof thermal-engine-v2|awk '{print $1}'); [ -n "$P" ] && kill -STOP $P;
+         for z in /sys/class/thermal/thermal_zone*; do echo disabled > $z/mode 2>/dev/null; done;
+         for d in /sys/class/thermal/cooling_device*; do [ -r "$d/type" ] || continue;
+           case "$(< "$d/type")" in cpu-cluster0|cpu-cluster1|gpu) echo 0 > "$d/cur_state" 2>/dev/null;; esac; done;
+         mkdir -p /data/adb/fuckorigin; date > /data/adb/fuckorigin/unlocked; echo OK`
+      : `for z in /sys/class/thermal/thermal_zone*; do echo enabled > $z/mode 2>/dev/null; done;
+         P=$(pidof thermal-engine-v2|awk '{print $1}'); [ -n "$P" ] && kill -CONT $P;
+         rm -f /data/adb/fuckorigin/unlocked; echo OK`;
+    const r = await kexec(cmd);
+    $('log').textContent = r.stdout + (r.stderr ? '\n' + r.stderr : '');
+  } else {
+    await fetch(API + '/api/' + verb, {method:'POST'});
+  }
+  setTimeout(()=>{ $('btn').disabled = false; $('relock').disabled = false; refresh(); }, 250);
+}
+
+$('btn').onclick = () => act($('btn').textContent.indexOf('撤销') >= 0 ? 'relock' : 'unlock');
+$('relock').onclick = () => act('relock');
+
+$('mode').textContent = hasKsu ? 'KernelSU 模块面板 · 以 root 直接执行' : '浏览器模式 · 走 127.0.0.1:8899';
+setTimeout(refresh, 400);   // 等 WebView 注入 window.ksu 再发第一次请求
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

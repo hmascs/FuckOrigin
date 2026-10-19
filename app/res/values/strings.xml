@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">FuckOrigin</string>
+    <string name="subtitle">OriginOS 温控 · 性能 · 云控增强</string>
+    <string name="restore">恢复默认</string>
+    <string name="diag">诊断</string>
+    <string name="master">温控解除</string>
+</resources>
