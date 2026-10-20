@@ -99,14 +99,44 @@ public final class Actions {
     }
 
     // ── CPU 顶频 ────────────────────────────────────────────────────
+    /**
+     * 顶频必须取 scaling_available_frequencies 的最大值。
+     * cpuinfo_max_freq 是硬件能力值（本机 3302400），并不在可写频点表里
+     * （最高档 3052800），写进去会被内核拒绝，scaling_max_freq 反而停在
+     * 某个中间档（实测 2630400）—— 表现就是"顶频开了，游戏还是很卡"。
+     */
+    private static String maxAvailFreq(String baseDir) {
+        String s = ShellExec.cat(baseDir + "/scaling_available_frequencies");
+        if (s == null || s.length() == 0) {
+            ShellExec.R r = ShellExec.su("cat " + baseDir + "/scaling_available_frequencies");
+            s = r.ok() ? r.out.trim() : null;
+        }
+        if (s != null && s.length() > 0) {
+            long best = -1;
+            String bs = null;
+            for (String x : s.trim().split("\\s+")) {
+                try {
+                    long v = Long.parseLong(x.trim());
+                    if (v > best) { best = v; bs = x.trim(); }
+                } catch (Throwable ignored) { }
+            }
+            if (bs != null) return bs;
+        }
+        String hw = ShellExec.cat(baseDir + "/cpuinfo_max_freq");
+        return hw == null ? null : hw.trim();
+    }
+
     private static String cpuMax(Context c, Feature f, boolean on) {
         String id = f.id;
         StringBuilder sb = new StringBuilder();
-        for (String p : new String[] { "policy0", "policy6" }) {
+        for (String p : Platform.perfPolicies()) {
             String baseDir = "/sys/devices/system/cpu/cpufreq/" + p;
             String cur = ShellExec.cat(baseDir + "/scaling_max_freq");
-            String hw = ShellExec.cat(baseDir + "/cpuinfo_max_freq");
-            if (hw == null) { ShellExec.R r = ShellExec.su("cat " + baseDir + "/cpuinfo_max_freq"); hw = r.out.trim(); }
+            String hw = maxAvailFreq(baseDir);
+            if (hw == null || hw.length() == 0) {
+                sb.append(p).append(" 无频点表，跳过 ");
+                continue;
+            }
             if (on) {
                 if (cur != null) Prefs.setS(c, "base." + id + "." + p, cur);
                 ShellExec.R r = ShellExec.su("echo " + hw + " > " + baseDir + "/scaling_max_freq");
@@ -117,6 +147,12 @@ public final class Actions {
             } else {
                 String b = base(c, id + "." + p, hw);
                 ShellExec.R r = ShellExec.su("echo " + b + " > " + baseDir + "/scaling_max_freq");
+                // 开启时把 c0_min 也拉到了顶频，关闭必须还原下限，
+                // 否则 min 会一直停在旧值（min==max 时 CPU 既不能升也不能降）。
+                String min = ShellExec.cat(baseDir + "/cpuinfo_min_freq");
+                if (min != null && min.trim().length() > 0) {
+                    ShellExec.su("echo " + min.trim() + " > " + baseDir + "/scaling_min_freq");
+                }
                 ShellExec.su("settings delete secure sys_perf_c0_max; settings delete secure sys_perf_c0_min");
                 sb.append(p).append(" ← ").append(b).append(r.ok() ? " ✓ " : " ✗ ");
             }
@@ -128,7 +164,7 @@ public final class Actions {
     // ── governor ────────────────────────────────────────────────────
     private static String governor(Context c, Feature f, boolean on) {
         StringBuilder sb = new StringBuilder();
-        for (String p : new String[] { "policy0", "policy6" }) {
+        for (String p : Platform.perfPolicies()) {
             String path = "/sys/devices/system/cpu/cpufreq/" + p + "/scaling_governor";
             String cur = ShellExec.cat(path);
             if (on) {
@@ -146,20 +182,40 @@ public final class Actions {
     }
 
     // ── GPU ─────────────────────────────────────────────────────────
+    /** GPU 最高可用频点（Hz） */
+    private static String gpuMaxAvail() {
+        String s = ShellExec.catOrRoot("/sys/class/kgsl/kgsl-3d0/gpu_available_frequencies");
+        if (s != null && s.length() > 0) {
+            long best = -1;
+            for (String x : s.trim().split("\\s+")) {
+                try {
+                    long v = Long.parseLong(x.trim());
+                    if (v > best) best = v;
+                } catch (Throwable ignored) { }
+            }
+            if (best > 0) return String.valueOf(best);
+        }
+        return ShellExec.catOrRoot("/sys/class/kgsl/kgsl-3d0/devfreq/max_freq");
+    }
+
     private static String gpuFloor(Context c, Feature f, boolean on) {
         String path = "/sys/class/kgsl/kgsl-3d0/min_pwrlevel";
         if (on) {
             String cur = ShellExec.catOrRoot(path);
             if (cur != null) Prefs.setS(c, "base." + f.id, cur);
             ShellExec.R r = ShellExec.su("echo 0 > " + path);
-            String gmax = ShellExec.catOrRoot("/sys/class/kgsl/kgsl-3d0/devfreq/max_freq");
-            ShellExec.su("settings put secure sys_perf_g_max "
-                    + (gmax == null ? "" : gmax.trim()));
+            // 上限必须取 gpu_available_frequencies 的最高档（本机 903000000）。
+            // 原来读 devfreq/max_freq，那是"当前被允许的上限"，当时正好是 770000000，
+            // 于是把 GPU 反过来锁死在 770MHz —— 越"锁最高档"越慢。
+            String gmax = gpuMaxAvail();
+            if (gmax != null && gmax.length() > 0) {
+                ShellExec.su("settings put secure sys_perf_g_max " + gmax);
+            }
             String now = ShellExec.catOrRoot("/sys/class/kgsl/kgsl-3d0/clock_mhz");
             f.setEnabled(c, true);
             return (r.ok() ? "min_pwrlevel=0 ✓ " : "写入失败 ✗ ") + "clock=" + now + " MHz";
         }
-        String b = base(c, f.id, "13");
+        String b = base(c, f.id, String.valueOf(Platform.gpuDefaultLevel()));
         ShellExec.R r = ShellExec.su("echo " + b + " > " + path);
         ShellExec.su("settings delete secure sys_perf_g_max");
         f.setEnabled(c, false);
@@ -168,18 +224,21 @@ public final class Actions {
 
     // ── core_ctl ────────────────────────────────────────────────────
     private static String coreCtl(Context c, Feature f, boolean on) {
-        String path = "/sys/devices/system/cpu/cpu6/core_ctl/min_cpus";
+        String core = Platform.coreCtlCore();
+        int min = Platform.coreCtlMin();
+        String path = "/sys/devices/system/cpu/" + core + "/core_ctl/min_cpus";
+        String tag = core + ".min_cpus=";
         if (on) {
             String cur = ShellExec.cat(path);
             if (cur != null) Prefs.setS(c, "base." + f.id, cur);
-            ShellExec.R r = ShellExec.su("echo 2 > " + path);
+            ShellExec.R r = ShellExec.su("echo " + min + " > " + path);
             f.setEnabled(c, true);
-            return "cpu6.min_cpus=2" + (r.ok() ? " ✓" : " ✗");
+            return tag + min + (r.ok() ? " ✓ " : " ✗ ") + Platform.describe();
         }
         String b = base(c, f.id, "0");
         ShellExec.R r = ShellExec.su("echo " + b + " > " + path);
         f.setEnabled(c, false);
-        return "cpu6.min_cpus=" + b + (r.ok() ? " ✓" : " ✗");
+        return tag + b + (r.ok() ? " ✓" : " ✗");
     }
 
     // ── settings 键 ─────────────────────────────────────────────────

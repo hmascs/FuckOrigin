@@ -57,7 +57,7 @@ public final class Live {
         sb.append("thml_fan_type: ").append(nz(Pem.readNode(Pem.FAN))).append('\n');
         sb.append("heatlimit    : ").append(nz(Pem.readNode(Pem.HEAT))).append("\n\n");
         sb.append("== cpufreq\n");
-        for (String p : new String[] { "policy0", "policy6" }) {
+        for (String p : Platform.perfPolicies()) {
             String b = "/sys/devices/system/cpu/cpufreq/" + p;
             sb.append(p).append(" cur=").append(nz(ShellExec.cat(b + "/scaling_cur_freq")))
               .append(" max=").append(nz(ShellExec.cat(b + "/scaling_max_freq")))
@@ -68,7 +68,7 @@ public final class Live {
         sb.append("clock=").append(nz(ShellExec.catOrRoot("/sys/class/kgsl/kgsl-3d0/clock_mhz")))
           .append(" MHz  min_pwr=").append(nz(ShellExec.catOrRoot("/sys/class/kgsl/kgsl-3d0/min_pwrlevel"))).append('\n');
         sb.append("\n== core_ctl\n");
-        for (String c : new String[] { "cpu0", "cpu6" }) {
+        for (String c : Platform.coreCtlCores()) {
             String d = "/sys/devices/system/cpu/" + c + "/core_ctl";
             sb.append(c).append(" max=").append(nz(ShellExec.cat(d + "/max_cpus")))
               .append(" min=").append(nz(ShellExec.cat(d + "/min_cpus")))

@@ -52,7 +52,8 @@ public final class Catalog {
 
         Feature unlockAll = new Feature("q2.unlock.all", "game", "解锁全部 Q 芯功能（合并）", "中", "已定位",
                 Feature.KIND_GROUP, "温控 + Monster+ + 超分标志位 一起放开",
-                "一次打开：温控解除、插帧/超分/视效豁免、强制 Monster+。背夹判定仍未覆盖。");
+                "一次打开：温控解除、插帧/超分/视效豁免、强制 Monster+，并伪造「已连接散热背夹」以解锁 Q 芯条目。"
+                + "散热风扇（CoolingFan）控制区默认关闭：本机没有风扇硬件。");
         unlockAll.children = new String[] { "thermal.bypass.global", "q2.mask.memc", "q2.mask.sr",
                 "q2.mask.ve", "perf.monsterplus.force" };
         add(unlockAll);
@@ -82,13 +83,16 @@ public final class Catalog {
         add(new Feature("q2.mask.ve", "perf", "视效增强 温控豁免", "低", "已定位",
                 Feature.KIND_HOOK, "displayenhance.c/f#…", "DisplayEnhancement 的过热分支。"));
         add(new Feature("perf.cpufreq.max", "perf", "CPU 顶频锁定", "中", "已实现",
-                Feature.KIND_ROOT, "policy0/policy6/scaling_max_freq", "写入 cpuinfo_max_freq，关闭时回滚基线。"));
+                Feature.KIND_ROOT, Platform.littlePolicy() + "/" + Platform.primePolicy() + "/scaling_max_freq",
+                "写入 cpuinfo_max_freq，关闭时回滚基线。"));
         add(new Feature("perf.governor", "perf", "调度器切 performance", "中", "已实现",
                 Feature.KIND_ROOT, "policy*/scaling_governor", "本机可选 walt/conservative/powersave/performance/schedutil。"));
         add(new Feature("perf.gpu.floor", "perf", "GPU 锁最高档", "中", "已实现",
-                Feature.KIND_ROOT, "kgsl-3d0/min_pwrlevel = 0", "14 档频率，最高 1.1GHz；写后读 clock_mhz 验证。"));
+                Feature.KIND_ROOT, "kgsl-3d0/min_pwrlevel = 0",
+                "本机 " + Platform.gpuLevels() + " 档频率；写后读 clock_mhz 验证。"));
         add(new Feature("perf.core_ctl.big", "perf", "大核常驻双核", "中", "已实现",
-                Feature.KIND_ROOT, "cpu6/core_ctl/min_cpus = 2", "实测 cpu6 簇 max=2/min=0/active=1。"));
+                Feature.KIND_ROOT, Platform.coreCtlCore() + "/core_ctl/min_cpus = " + Platform.coreCtlMin(),
+                "超大核簇 " + Platform.primePolicy() + "（" + Platform.coreCtlCore() + "）。"));
 
         // ── 游戏与侧边栏 ──────────────────────────────────────────────
         
@@ -131,7 +135,8 @@ public final class Catalog {
         // ── 设备与调试 ────────────────────────────────────────────────
         add(new Feature("perf.monsterplus.force", "perf", "强制 Monster+ 模式", "中", "已定位",
                 Feature.KIND_HOOK, "com.vivo.gameassistant.entity.MonsterPlusEvent#isMonster()Z",
-                "Q 芯专区的超分/插帧在「未连背夹或未开 Monster+」时不可用；此项让 MonsterPlusEvent 恒为 true。"));
+                "Q 芯专区的超分/插帧在「未连背夹或未开 Monster+」时不可用；此项让 MonsterPlusEvent 恒为 true。"
+                + "注意：这是「Monster+ 模式」判定，不等于背夹连接态——背夹那条默认已关闭。"));
         add(new Feature("perf.pem.thermal_mode", "perf", "PEM 温控模式（实验）", "高", "待实验",
                 Feature.KIND_ROOT, "/proc/pem/thml_type",
                 "PowerEffectManager 的温控模式节点，实测 rw-rw-rw-。仅在 温度<40℃ 且未充电 时可开，开启后 60 秒自动写回原值。"));

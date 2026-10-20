@@ -17,7 +17,7 @@ public final class Diag {
             "case \"$ty\" in gpuss-0|gpuss-3|cpu-0-0-0|cpuss-0-0|tz_shell|tz_game_shell|quiet_therm|ap_therm|battery) " +
             "echo \"$ty = $(cat $t/temp 2>/dev/null)\";; esac; i=$((i+1)); done",
         "echo '## cpufreq'",
-        "for p in policy0 policy6; do b=/sys/devices/system/cpu/cpufreq/$p; " +
+        "for p in " + Platform.perfPoliciesShell() + "; do b=/sys/devices/system/cpu/cpufreq/$p; " +
             "echo \"$p cur=$(cat $b/scaling_cur_freq) max=$(cat $b/scaling_max_freq) hw=$(cat $b/cpuinfo_max_freq) gov=$(cat $b/scaling_governor)\"; done",
         "echo '## gpu'",
         "echo \"clock=$(cat /sys/class/kgsl/kgsl-3d0/clock_mhz) min_pwr=$(cat /sys/class/kgsl/kgsl-3d0/min_pwrlevel)\"",
