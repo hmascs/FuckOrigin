@@ -1,6 +1,6 @@
 id=fuckorigin-thermal
 name=FuckOrigin Thermal
-version=v1.3.0
-versionCode=4
+version=v1.3.1
+versionCode=5
 author=hmascs
-description=解除 OriginOS 温控限频：冻结 thermal-engine-v2、关闭热区 governor、把冷却设备 cur_state 归零。默认不开启，机身超过 52 度自动回退。v1.3 起同时承载 gamecube 超分/插帧配置覆盖（和平精英补齐 2K 超分与 Monster+ 144 插帧）。模块卡片的执行按钮可一键切换。
+description=解除 OriginOS 温控限频：冻结 thermal-engine-v2、关闭热区 governor、把冷却设备 cur_state 归零。默认不开启，机身超过 52 度自动回退。v1.3.1 起把簇编号/冷却设备/配置表改为运行期探测，兼容骁龙 8 Gen 3（pineapple）与 8 至尊版（sun）。

@@ -13,6 +13,7 @@ public final class DeviceInfo {
         boolean root;
         try { root = ShellExec.hasRoot(); } catch (Throwable t) { root = false; }
         return android.os.Build.MODEL + (TextUtils.isEmpty(vivo) ? "" : " · " + vivo)
-            + " · Android " + android.os.Build.VERSION.RELEASE + " · " + (root ? "root ✓" : "无 root");
+            + " · Android " + android.os.Build.VERSION.RELEASE + " · " + (root ? "root ✓" : "无 root")
+            + " · " + Platform.describe();
     }
 }

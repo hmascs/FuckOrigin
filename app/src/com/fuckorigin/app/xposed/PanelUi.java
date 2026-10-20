@@ -15,6 +15,8 @@ import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.fuckorigin.app.Platform;
+
 import java.io.File;
 import java.io.FileInputStream;
 import java.util.ArrayList;
@@ -56,8 +58,8 @@ final class PanelUi {
             return;
         }
 
-        final List<Long> cpu = readFreqs("/sys/devices/system/cpu/cpufreq/policy6/scaling_available_frequencies",
-                "/sys/devices/system/cpu/cpufreq/policy6/cpuinfo_max_freq");
+        final List<Long> cpu = readFreqs(Platform.primeDir() + "/scaling_available_frequencies",
+                Platform.primeDir() + "/cpuinfo_max_freq");
         final List<Long> gpu = readFreqs("/sys/class/kgsl/kgsl-3d0/gpu_available_frequencies",
                 "/sys/class/kgsl/kgsl-3d0/gpu_maxfreq");
 

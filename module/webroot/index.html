@@ -115,19 +115,33 @@ function kexec(cmd){
   });
 }
 
-/* 一次性把状态取全 —— 用 shell 内建 $(<f) 读，95 个热区也只要 45ms */
-const STATUS_SH = "P=$(pidof thermal-engine-v2 | awk '{print $1}'); echo ENGINE $P; [ -n \"$P\" ] && echo STAT $(ps -o STAT -p $P 2>/dev/null | tail -1); for d in /sys/class/thermal/cooling_device*; do [ -r $d/type ] || continue; t=$(< $d/type); case $t in cpu-cluster0|cpu-cluster1|gpu) echo CD $t $(< $d/cur_state) $(< $d/max_state);; esac; done; [ -r /sys/devices/system/cpu/cpufreq/policy6/scaling_max_freq ] && echo F6 $(< /sys/devices/system/cpu/cpufreq/policy6/scaling_max_freq) $(< /sys/devices/system/cpu/cpufreq/policy6/cpuinfo_max_freq); [ -r /sys/class/kgsl/kgsl-3d0/max_gpuclk ] && { G=$(< /sys/class/kgsl/kgsl-3d0/max_gpuclk); A=$(< /sys/class/kgsl/kgsl-3d0/gpu_available_frequencies); echo GPU $G $(printf '%s\n' $A | sort -n | tail -1); }; for z in /sys/class/thermal/thermal_zone*; do [ -r $z/type ] || continue; echo TZ $(< $z/type) $(< $z/temp); done; echo TS $(dumpsys thermalservice 2>/dev/null | grep -m1 Thermal); echo FLAG $([ -f /data/adb/fuckorigin/unlocked ] && echo 1 || echo 0)"
+/* 一次性把状态取全 —— 用 shell 内建 $(<f) 读，95 个热区也只要 45ms
+   注意：不能写死 cpu-cluster0/1 和 policy6。
+   8 Elite(sun) 只有 2 个簇、超大核在 policy6；8 Gen 3(pineapple) 有 4 个簇、超大核在 policy7。
+   冷却设备按 type 前缀收集，超大核簇按"核数最少的 policy"现探。 */
+const STATUS_SH = [
+  "P=$(pidof thermal-engine-v2 | awk '{print $1}')",
+  'echo ENGINE $P',
+  '[ -n "$P" ] && echo STAT $(ps -o STAT -p $P 2>/dev/null | tail -1)',
+  'for d in /sys/class/thermal/cooling_device*; do [ -r $d/type ] || continue; t=$(< $d/type); case $t in cpu-cluster*) echo CDCL $t $(< $d/cur_state) $(< $d/max_state);; gpu) echo CDG $(< $d/cur_state) $(< $d/max_state);; esac; done',
+  'PB=""; PN=99; PF=0; for d in /sys/devices/system/cpu/cpufreq/policy*; do f=$(< $d/cpuinfo_max_freq 2>/dev/null) || continue; [ -n "$f" ] || continue; n=$(wc -w < $d/related_cpus 2>/dev/null); [ -n "$n" ] || n=99; if [ -z "$PB" ] || [ $n -lt $PN ]; then PB=$d; PN=$n; PF=$f; fi; done; if [ -n "$PB" ]; then AM=$(printf "%s\\n" $(< $PB/scaling_available_frequencies) | sort -n | tail -1); [ -n "$AM" ] && PF=$AM; echo FB $(< $PB/scaling_max_freq) $PF; fi',
+  '[ -r /sys/class/kgsl/kgsl-3d0/max_gpuclk ] && { G=$(< /sys/class/kgsl/kgsl-3d0/max_gpuclk); A=$(< /sys/class/kgsl/kgsl-3d0/gpu_available_frequencies); echo GPU $G $(printf "%s\\n" $A | sort -n | tail -1); }',
+  'for z in /sys/class/thermal/thermal_zone*; do [ -r $z/type ] || continue; echo TZ $(< $z/type) $(< $z/temp); done',
+  'echo TS $(dumpsys thermalservice 2>/dev/null | grep -m1 Thermal)',
+  'echo FLAG $([ -f /data/adb/fuckorigin/unlocked ] && echo 1 || echo 0)'
+].join('; ')
 
 function parseDump(text){
-  const s = {engine:'-', estat:'未运行', coolers:[], f6:'0', f6h:'0', gpu:'0', gpuh:'0',
+  const s = {engine:'-', estat:'未运行', clusters:[], gpuCool:null, f6:'0', f6h:'0', gpu:'0', gpuh:'0',
              shell:0, cpu:0, gpuT:0, ts:'', unlocked:false};
   text.split('\n').forEach(line=>{
     const p = line.trim().split(/\s+/);
     switch(p[0]){
       case 'ENGINE': s.engine = p[1] || '-'; break;
       case 'STAT':   s.estat = (p.slice(1).join('').includes('T') && s.engine!=='-') ? '已冻结' : (s.engine!=='-'?'运行中':'未运行'); break;
-      case 'CD':     if(p[1]) s.coolers.push({type:p[1], cur:p[2], max:p[3]}); break;
-      case 'F6':     s.f6 = p[1]; s.f6h = p[2]; break;
+      case 'CDCL':   if(p[1]) s.clusters.push({type:p[1], cur:p[2], max:p[3]}); break;
+      case 'CDG':    s.gpuCool = {cur:p[1], max:p[2]}; break;
+      case 'FB':     s.f6 = p[1]; s.f6h = p[2]; break;
       case 'GPU':    s.gpu = p[1]; s.gpuh = p[2]; break;
       case 'TZ': {
         const v = parseFloat(p[2]) / 1000;
@@ -164,10 +178,21 @@ function render(s){
   $('gpu').textContent = isFinite(gh) && gh ? Math.round(gh/1e6) + ' MHz' : '—';
   $('gpubar').style.width = gh ? Math.min(100, g*100/gh) + '%' : '0';
 
-  s.coolers.forEach((c,i)=>{
-    const el = $('c'+i);
-    if(el) el.textContent = (c.cur||'?') + ' / ' + (c.max||'?') + '  ' + c.type;
-  });
+  // 冷却档位：cur_state=0 表示没被温控降频；>0 表示已经压到第 N 档
+  const cs = (s.clusters || []).slice()
+      .sort((x, y) => String(x.type).localeCompare(String(y.type), undefined, {numeric: true}));
+  const little = cs[0] || null, big = cs.length > 1 ? cs[cs.length - 1] : cs[0] || null;
+  const setC = (id, o, fallbackName) => {
+    const el = $(id);
+    if (!el) return;
+    if (!o) { el.textContent = '—'; return; }
+    const cur = parseInt(o.cur, 10);
+    const state = (!isFinite(cur) || cur <= 0) ? '未降频' : '降频中';
+    el.textContent = state + ' · ' + (o.cur || '?') + '/' + (o.max || '?') + ' 档 · ' + (o.type || fallbackName);
+  };
+  setC('c0', little);
+  setC('c1', big);
+  setC('c2', s.gpuCool, 'gpu');
 
   $('tick').textContent = new Date().toLocaleTimeString();
 }
@@ -180,8 +205,11 @@ async function refresh(){
     } else {
       const r = await fetch(API + '/api/status', {cache:'no-store'});
       const j = await r.json();
+      const cds = j.coolers || [];
       render({unlocked:j.unlocked, engine:j.engine.pid, estat:j.engine.state,
-              coolers:j.coolers, f6:j.freq.p6, f6h:j.freq.p6h, gpu:j.freq.gpu, gpuh:j.freq.gpuh,
+              clusters: cds.filter(c => String(c.type).startsWith('cpu-cluster')),
+              gpuCool: cds.find(c => c.type === 'gpu') || null,
+              f6:j.freq.p6, f6h:j.freq.p6h, gpu:j.freq.gpu, gpuh:j.freq.gpuh,
               shell:j.temp.shell, cpu:j.temp.cpu, gpuT:j.temp.gpu, ts:j.thermal});
       const lr = await fetch(API + '/api/log', {cache:'no-store'});
       const arr = await lr.json();
